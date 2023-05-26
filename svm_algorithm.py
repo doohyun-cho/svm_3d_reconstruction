@@ -6,7 +6,7 @@ from shapely.geometry import LineString
 
 class SVMAlgorithm(Util):
     def __init__(self) -> None:
-        pass
+        super().__init__()
 
     def is_point_visible(self, XYZs, cam_info):
         """
@@ -65,16 +65,16 @@ class SVMAlgorithm(Util):
     
     def compute_essential_matrix(
             self, 
-            cam_info0 : Cameras._CameraInfo, 
-            cam_info1 : Cameras._CameraInfo,
+            cam0_info : Cameras._CameraInfo, 
+            cam1_info : Cameras._CameraInfo,
             flag_F=False
         ):
         """
         Compute the essential matrix.
         
         Args:
-            cam_info0: Information about camera 0
-            cam_info1: Information about camera 1
+            cam0_info: Information about camera 0
+            cam1_info: Information about camera 1
             flag_F: Boolean flag, if true returns the Fundamental matrix
 
         Returns:
@@ -87,13 +87,13 @@ class SVMAlgorithm(Util):
                     [-x[1], x[0], 0]])
         
         if False:
-            R_CV = cam_info1.R_CV @ cam_info0.R_CV.T         # R not happy, not converted to CV yet
-            t_CV = self.XYZ_SV2CV(cam_info1.R_SV @ (cam_info1.origin_SV - cam_info0.origin_SV))   # t happy, converted to CV frame
+            R_CV = cam1_info.R_CV @ cam0_info.R_CV.T         # R not happy, not converted to CV yet
+            t_CV = self.XYZ_SV2CV(cam1_info.R_SV @ (cam1_info.origin_SV - cam0_info.origin_SV))   # t happy, converted to CV frame
             E = skew(np.ravel(t_CV)) @ R_CV
         else:
             # Compute the Essential matrix
-            R_CV = cam_info1.R_CV @ cam_info0.R_CV.T
-            t_CV = cam_info0.R_CV @ (cam_info1.origin_CV - cam_info0.origin_CV)
+            R_CV = cam1_info.R_CV @ cam0_info.R_CV.T
+            t_CV = cam0_info.R_CV @ (cam1_info.origin_CV - cam0_info.origin_CV)
             E = R_CV @ skew(np.ravel(t_CV))
         
         if flag_F:
@@ -162,21 +162,30 @@ class SVMAlgorithm(Util):
 
     def reconstruct_3D_point(
         self,
-        cam_info0 : Cameras._CameraInfo, 
-        cam_info1 : Cameras._CameraInfo,
-        line_pos : LinePos
+        cam0_info : Cameras._CameraInfo, 
+        cam1_info : Cameras._CameraInfo,
+        line_pos : LinePos,
+        cam0_delta_rpy=None,
+        cam1_delta_rpy=None,
+        cam1_delta_xy=None
     ):
         """
         Calculate 3D point from cam0's epiline base point 'xy_cam0' and epiline from cam0 -> cam1 
 
         Parameters
         ----------
-        cam_info0 : Cameras._CameraInfo
+        cam0_info : Cameras._CameraInfo
             Camera0 information
-        cam_info1 : Cameras._CameraInfo
+        cam1_info : Cameras._CameraInfo
             Camera1 information
         line_pos : LinePos
             Line position (e.g., Left, Right, NextLeft, ...)
+        cam0_delta_rpy (Optional)
+            Camera0 default setup angle error (degree)
+        cam1_delta_rpy (Optional)
+            Camera1 default setup angle error (degree)
+        cam1_delta_xy (Optional, numpy.ndarray)
+            intersection point error in Camera1 image plane (pixel)            
 
         Returns
         -------
@@ -185,10 +194,10 @@ class SVMAlgorithm(Util):
         """
         # epiline   from cam0 -> cam1
         # road line from cam1
-        cam0_name = f'from_{cam_info0.cam_dir.name}'
-        xy_cam0_undist = cam_info1.epilines[cam0_name]['base_point_undist']
-        xys_epiline = cam_info1.epilines[cam0_name]['epiline']
-        xys_road_line = cam_info1.road_lines[line_pos.name]
+        cam0_name = f'from_{cam0_info.cam_dir.name}'
+        xy_cam0_undist = cam1_info.epilines[cam0_name]['base_point_undist']
+        xys_epiline = cam1_info.epilines[cam0_name]['epiline']
+        xys_road_line = cam1_info.road_lines[line_pos.name]
 
         # generate spline info
         tck_epiline, fp_epiline = self.calculate_spline(xys_epiline)
@@ -198,15 +207,17 @@ class SVMAlgorithm(Util):
         # I believe there'd be only a single intersection point in this simulation...
         intersections = self.find_intersections(tck_epiline, fp_epiline, tck_road_line, fp_road_line)
         xy_cam1 = intersections[0]
-        xy_cam1_undist = self.undistort_xy(xy_cam1, cam_info1)
+        if cam1_delta_xy is not None:
+            xy_cam1 += cam1_delta_xy
+        xy_cam1_undist = self.undistort_xy(xy_cam1, cam1_info)
 
         K_inv = np.linalg.inv(K)
         uv0 = K_inv @ np.vstack((xy_cam0_undist,1))
         uv1 = K_inv @ np.vstack((xy_cam1_undist,1))
 
         # triangulate using points from each camera
-        T0 = self.get_transformation_matrix_CV(cam_info0)
-        T1 = self.get_transformation_matrix_CV(cam_info1)
+        T0 = self.get_transformation_matrix_CV(cam0_info, cam0_delta_rpy)
+        T1 = self.get_transformation_matrix_CV(cam1_info, cam1_delta_rpy)
         P0 = T0[:3]
         P1 = T1[:3]
 

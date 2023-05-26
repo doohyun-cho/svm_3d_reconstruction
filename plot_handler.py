@@ -133,15 +133,16 @@ class PlotHandler:
             cube = Poly3DCollection(cube_faces, alpha=.25)
             return cube_line_pairs, cube
         
+        vehicle_mid_height = vehicle_height*0.6
         cube_body_vertices = np.array([
             [rear_tx, right_ty, vehicle_z_bottom],
             [front_tx, right_ty, vehicle_z_bottom],
             [front_tx, left_ty, vehicle_z_bottom],
             [rear_tx, left_ty, vehicle_z_bottom],
-            [rear_tx, right_ty, vehicle_height],
-            [front_tx, right_ty, vehicle_height],
-            [front_tx, left_ty, vehicle_height],
-            [rear_tx, left_ty, vehicle_height],
+            [rear_tx, right_ty, vehicle_mid_height],
+            [front_tx, right_ty, vehicle_mid_height],
+            [front_tx, left_ty, vehicle_mid_height],
+            [rear_tx, left_ty, vehicle_mid_height],
         ])
         cube_body_line_pairs, cube_body = get_cube_info(cube_body_vertices)
 
@@ -151,14 +152,14 @@ class PlotHandler:
 
         # add bonnet
         cube_bonnet_vertices = np.array([
-            [front_tx, right_ty, vehicle_z_bottom],
-            [front_tx+bonnet_x, right_ty, vehicle_z_bottom],
-            [front_tx+bonnet_x, left_ty, vehicle_z_bottom],
-            [front_tx, left_ty, vehicle_z_bottom],
-            [front_tx, right_ty, vehicle_height*0.6],
-            [front_tx+bonnet_x, right_ty, vehicle_height/2],
-            [front_tx+bonnet_x, left_ty, vehicle_height/2],
-            [front_tx, left_ty, vehicle_height*0.6],
+            [rear_tx, right_ty, vehicle_mid_height],
+            [front_tx-bonnet_x, right_ty, vehicle_mid_height],
+            [front_tx-bonnet_x, left_ty, vehicle_mid_height],
+            [rear_tx, left_ty, vehicle_mid_height],
+            [rear_tx, right_ty, vehicle_height],
+            [front_tx-1.2*bonnet_x, right_ty, vehicle_height],
+            [front_tx-1.2*bonnet_x, left_ty, vehicle_height],
+            [rear_tx, left_ty, vehicle_height],
         ])
         cube_bonnet_line_pairs, cube_bonnet = get_cube_info(cube_bonnet_vertices)
 
@@ -173,8 +174,8 @@ class PlotHandler:
         # Draw tires
         self.draw_tire(0, right_ty + tire_width/2, tire_height/2)
         self.draw_tire(0, left_ty - tire_width/2, tire_height/2)
-        self.draw_tire(front_tx - 0.1, right_ty + tire_width/2, tire_height/2)
-        self.draw_tire(front_tx - 0.1, left_ty - tire_width/2, tire_height/2)
+        self.draw_tire(front_tx - tire_dtx, right_ty + tire_width/2, tire_height/2)
+        self.draw_tire(front_tx - tire_dtx, left_ty - tire_width/2, tire_height/2)
     
     def draw_cam_CV_axes(self, CV_axes_points):
         ax = self.axs[0]
@@ -286,13 +287,13 @@ class PlotHandler:
     def draw_3D_both_visible_pts_on_ground(
             self, 
             XYZs, 
-            cam_info0 : Cameras._CameraInfo, 
-            cam_info1 : Cameras._CameraInfo
+            cam0_info : Cameras._CameraInfo, 
+            cam1_info : Cameras._CameraInfo
         ):
         ax = self.axs[0]
 
-        is_cam0_visible = self.svm.is_point_visible(XYZs, cam_info0)
-        is_cam1_visible = self.svm.is_point_visible(XYZs, cam_info1)
+        is_cam0_visible = self.svm.is_point_visible(XYZs, cam0_info)
+        is_cam1_visible = self.svm.is_point_visible(XYZs, cam1_info)
         is_visible = is_cam0_visible & is_cam1_visible
         
         ax.scatter(XYZs[0,is_cam0_visible], 
@@ -426,26 +427,26 @@ class PlotHandler:
 
     def handle_essential_info(
         self,            
-        cam_info0 : Cameras._CameraInfo,    # source camera
-        cam_info1 : Cameras._CameraInfo,    # target camera
+        cam0_info : Cameras._CameraInfo,    # source camera
+        cam1_info : Cameras._CameraInfo,    # target camera
         xy_cam0,
         line_pos : LinePos  # xy_cam0's line position
     ):
         
-        E, F = self.svm.compute_essential_matrix(cam_info0, cam_info1, flag_F=True)
-        label_type_name = cam_info0.cam_dir.name + '2' + cam_info1.cam_dir.name
+        E, F = self.svm.compute_essential_matrix(cam0_info, cam1_info, flag_F=True)
+        label_type_name = cam0_info.cam_dir.name + '2' + cam1_info.cam_dir.name
 
         # if fisheye, undistortion needed
         # since we calculate epiline based on undistorted image point
-        if cam_info0.cam_type == CamType.Fisheye:
-            xy_cam0 = self.svm.undistort_xy(xy_cam0, cam_info0)
+        if cam0_info.cam_type == CamType.Fisheye:
+            xy_cam0 = self.svm.undistort_xy(xy_cam0, cam0_info)
 
-        epipole = self.draw_epipole(cam_info1, F, label_type_name)
+        epipole = self.draw_epipole(cam1_info, F, label_type_name)
         epiline_eq = self.svm.compute_epipolar_line_eq(F, xy_cam0)
-        epiline = self.draw_epiline(cam_info1, epiline_eq)
+        epiline = self.draw_epiline(cam1_info, epiline_eq)
         
-        cam_info1.epipoles[f'from_{cam_info0.cam_dir.name}'] = epipole 
-        cam_info1.epilines[f'from_{cam_info0.cam_dir.name}'] = {'base_point_undist':xy_cam0,   # source point in cam0 of epiline
+        cam1_info.epipoles[f'from_{cam0_info.cam_dir.name}'] = epipole 
+        cam1_info.epilines[f'from_{cam0_info.cam_dir.name}'] = {'base_point_undist':xy_cam0,   # source point in cam0 of epiline
                                                                 'line_pos':line_pos,    # # xy_cam0's line position
                                                                 'epiline':epiline}      # epiline
 

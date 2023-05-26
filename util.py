@@ -1,13 +1,13 @@
 import numpy as np
 from camera_structure import *
-from scipy.optimize import fmin
+from scipy.optimize import fmin, minimize
 
 class Util:
     """
     Initialize the Util class
     """
     def __init__(self) -> None:
-        self.flag_undistort_fmin = False     # whether to use scipy fmin for point undistortion
+        self.flag_undistort_fmin = True     # whether to use scipy fmin for point undistortion
 
     def calculate_fov(self, image_size, focal_length):
         """
@@ -22,22 +22,22 @@ class Util:
         """
         return 2 * np.arctan(image_size / (2 * focal_length))
 
-    def rotation_matrix_SV(self, roll, pitch, yaw):
+    def rotation_matrix_SV(self, roll_deg, pitch_deg, yaw_deg):
         """
         Calculate the rotation matrix in SV coordinate system
 
         Args:
-            roll (float): Roll angle in degrees
-            pitch (float): Pitch angle in degrees
-            yaw (float): Yaw angle in degrees
+            roll_deg (float): Roll angle in degrees
+            pitch_deg (float): Pitch angle in degrees
+            yaw_deg (float): Yaw angle in degrees
 
         Returns:
             numpy.ndarray: Rotation matrix in SV coordinate system (3x3)
         """
         # Convert degrees to radians
-        roll_rad = np.radians(roll)
-        pitch_rad = np.radians(pitch)
-        yaw_rad = np.radians(yaw)
+        roll_rad = np.radians(roll_deg)
+        pitch_rad = np.radians(pitch_deg)
+        yaw_rad = np.radians(yaw_deg)
 
         # Calculate the individual rotation matrices
         R_roll = np.array([
@@ -62,22 +62,22 @@ class Util:
 
         return R    
     
-    def rotation_matrix_CV(self, roll, pitch, yaw):
+    def rotation_matrix_CV(self, roll_deg, pitch_deg, yaw_deg):
         """
         Calculate the rotation matrix in openCV coordinate system
 
         Args:
-            roll (float): Roll angle in degrees
-            pitch (float): Pitch angle in degrees
-            yaw (float): Yaw angle in degrees
+            roll_deg (float): Roll angle in degrees
+            pitch_deg (float): Pitch angle in degrees
+            yaw_deg (float): Yaw angle in degrees
 
         Returns:
             numpy.ndarray: Rotation matrix in openCV coordinate system (3x3)
         """
         # Convert degrees to radians
-        roll_rad = np.radians(roll)
-        pitch_rad = np.radians(pitch)
-        yaw_rad = np.radians(yaw)
+        roll_rad = np.radians(roll_deg)
+        pitch_rad = np.radians(pitch_deg)
+        yaw_rad = np.radians(yaw_deg)
 
         # Calculate the individual rotation matrices
         R_pitch = np.array([
@@ -165,23 +165,35 @@ class Util:
         
         return XYZs_cam_CV
     
-    def get_transformation_matrix_CV(self, cam_info : Cameras._CameraInfo):
+    def get_transformation_matrix_CV(self, cam_info : Cameras._CameraInfo, delta_rpy=None):
         """
         Get the transformation matrix in openCV coordinate system
 
         Args:
             cam_info (Cameras._CameraInfo): Camera information
+            delta_rpy (tuple with three elements - roll, pitch, and yaw in degree)
+                camera setup error angle (for error analysis)
+                if None, use default rotation matrix
 
         Returns:
             numpy.ndarray: Transformation matrix (4x4)
         """
-        origin_cam_CV, R_CV = cam_info.origin_CV, cam_info.R_CV
+        origin_cam_CV = cam_info.origin_CV
+        if delta_rpy is None:
+            R_CV = cam_info.R_CV
+        else:
+            delta_roll, delta_pitch, delta_yaw = delta_rpy        
+            roll = cam_info.roll + delta_roll
+            pitch = cam_info.pitch + delta_pitch
+            yaw = cam_info.yaw + delta_yaw
+            R_CV = self.rotation_matrix_CV(roll, pitch, yaw)
+
         T = np.eye(4)
         T[:3,:3] = R_CV
         T[:3,3] = R_CV @ (-origin_cam_CV)[:,0]
         
         return T
-       
+    
     def world2CAMxy(self, XYZs_SV, cam_info : Cameras._CameraInfo, K):
         """
         Convert world coordinates to camera image coordinates
@@ -351,7 +363,8 @@ class Util:
                     return np.linalg.norm(duv)**2
                 
                 # use fmin to find the best uv_undist
-                uv_undist = fmin(cost_func, uv_undist)
+                # uv_undist = fmin(cost_func, uv_undist, )
+                uv_undist = minimize(cost_func, uv_undist).x
             else:
                 flag_converge=False
                 r_distort_orig = np.linalg.norm(uv_undist)
