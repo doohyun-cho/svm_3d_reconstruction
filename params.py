@@ -1,6 +1,7 @@
 import numpy as np
-from util import Util
+from util import Util, struct
 from camera_structure import *
+
 
 # extrinsic parameters refered from
 # https://stradvision.atlassian.net/wiki/spaces/ParkingPost/pages/47091358842/SVM+Offline+calibration+tool

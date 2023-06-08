@@ -295,6 +295,7 @@ class PlotHandler:
         is_cam0_visible = self.svm.is_point_visible(XYZs, cam0_info)
         is_cam1_visible = self.svm.is_point_visible(XYZs, cam1_info)
         is_visible = is_cam0_visible & is_cam1_visible
+        is_visible = np.where(is_visible)[0]
         
         ax.scatter(XYZs[0,is_cam0_visible], 
                 XYZs[1,is_cam0_visible], 
@@ -342,7 +343,7 @@ class PlotHandler:
 
         ax = self.axs[cam_info.cam_dir.value]
         
-        xys = self.svm.world2CAMxy(XYZs, cam_info, K)
+        xys = self.svm.worldXYZ_SV2CAMxy(XYZs, cam_info, K)
         vis = self.svm.is_point_visible(XYZs, cam_info)
 
         if np.sum(vis) > 0:
@@ -362,16 +363,16 @@ class PlotHandler:
             ax.scatter(xys[0,idx_first_vis], xys[1,idx_first_vis], s=50, marker='^', label=f'both_visible_{label_type_name}')        
     
     def draw_line_info(self, pointA, pointB, line_pos : LinePos):
-        XYZs_line = self.svm.get_line_from_points_3D(pointA, pointB)
+        XYZs_line = self.svm.get_line_from_points_3D(pointA, pointB, num_points_=16)
         
         vis_FL = self.draw_3D_both_visible_pts_on_ground(XYZs_line, cameras.F, cameras.L)
         vis_FR = self.draw_3D_both_visible_pts_on_ground(XYZs_line, cameras.F, cameras.R)
         vis_BL = self.draw_3D_both_visible_pts_on_ground(XYZs_line, cameras.B, cameras.L)
         vis_BR = self.draw_3D_both_visible_pts_on_ground(XYZs_line, cameras.B, cameras.R)
-        idx_first_vis_FL = np.where(vis_FL)[0][1] if np.any(vis_FL) else None
-        idx_first_vis_FR = np.where(vis_FR)[0][1] if np.any(vis_FR) else None
-        idx_last_vis_BL = np.where(vis_BL)[0][-2] if np.any(vis_BL) else None
-        idx_last_vis_BR = np.where(vis_BR)[0][-2] if np.any(vis_BR) else None
+        idx_first_vis_FL = vis_FL[1] if np.any(vis_FL) else None
+        idx_first_vis_FR = vis_FR[1] if np.any(vis_FR) else None
+        idx_last_vis_BL = vis_BL[-2] if np.any(vis_BL) else None
+        idx_last_vis_BR = vis_BR[-2] if np.any(vis_BR) else None
         
         xys_F = self.draw_XYZs2xy_cam(XYZs_line, cameras.F, line_pos=line_pos)
         xys_B = self.draw_XYZs2xy_cam(XYZs_line, cameras.B, line_pos=line_pos)
@@ -422,14 +423,15 @@ class PlotHandler:
         if cam_info.cam_type is CamType.Fisheye:
             xys_epiline = self.svm.distort_xy(xys_epiline, cam_info)
             
-        ax.plot(xys_epiline[0], xys_epiline[1])
+        ax.plot(xys_epiline[0], xys_epiline[1], zorder=0)   # want to draw under the existing plot objects
         return xys_epiline
 
     def handle_essential_info(
         self,            
         cam0_info : Cameras._CameraInfo,    # source camera
         cam1_info : Cameras._CameraInfo,    # target camera
-        xy_cam0,
+        xys_cam0,           # line points of cam0
+        vis_cam01,          # visiblity array of xys (both visible for cam0 and cam1)
         line_pos : LinePos  # xy_cam0's line position
     ):
         
@@ -439,16 +441,20 @@ class PlotHandler:
         # if fisheye, undistortion needed
         # since we calculate epiline based on undistorted image point
         if cam0_info.cam_type == CamType.Fisheye:
-            xy_cam0 = self.svm.undistort_xy(xy_cam0, cam0_info)
+            xys_cam0 = self.svm.undistort_xy(xys_cam0, cam0_info)
 
         epipole = self.draw_epipole(cam1_info, F, label_type_name)
-        epiline_eq = self.svm.compute_epipolar_line_eq(F, xy_cam0)
-        epiline = self.draw_epiline(cam1_info, epiline_eq)
-        
         cam1_info.epipoles[f'from_{cam0_info.cam_dir.name}'] = epipole 
-        cam1_info.epilines[f'from_{cam0_info.cam_dir.name}'] = {'base_point_undist':xy_cam0,   # source point in cam0 of epiline
-                                                                'line_pos':line_pos,    # # xy_cam0's line position
-                                                                'epiline':epiline}      # epiline
+        
+        cam1_info.epilines[f'from_{cam0_info.cam_dir.name}'] = dict.fromkeys([line_pos_.name for line_pos_ in LinePos])
+        cam1_info.epilines[f'from_{cam0_info.cam_dir.name}'][line_pos.name] = {}
+        # save epiline info for all visible cam0 line points
+        for idx_vis in vis_cam01:
+            xy_cam0 = xys_cam0[:,idx_vis]
+            epiline_eq = self.svm.compute_epipolar_line_eq(F, xy_cam0)
+            epiline = self.draw_epiline(cam1_info, epiline_eq)          
+            cam1_info.epilines[f'from_{cam0_info.cam_dir.name}'][line_pos.name][idx_vis] = {'base_point_undist':xy_cam0,     # source point in cam0 of epiline
+                                                                                            'epiline':epiline}               # epiline
 
     def set_plots(self):
         ax = self.axs[0]

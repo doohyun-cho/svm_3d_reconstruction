@@ -2,6 +2,9 @@ import numpy as np
 from camera_structure import *
 from scipy.optimize import fmin, minimize
 
+class struct():
+    pass
+
 class Util:
     """
     Initialize the Util class
@@ -148,22 +151,6 @@ class Util:
         XYZs_CV = T_SV2CV @ XYZs_SV
         
         return XYZs_CV
-
-    def worldXYZ_SV2camXYZ_CV(self, worldXYZs_SV, cam_info : Cameras._CameraInfo):
-        """
-        Convert world coordinates in SV coordinate system to camera coordinates in openCV coordinate system
-
-        Args:
-            worldXYZs_SV (numpy.ndarray): 3D world points in SV coordinate system (3xn)
-            cam_info (Cameras._CameraInfo): Camera information
-
-        Returns:
-            numpy.ndarray: 3D points in camera coordinates in openCV coordinate system (3xn)
-        """
-        XYZs_cam_SV = self.worldXYZ_SV2camXYZ_SV(worldXYZs_SV, cam_info)
-        XYZs_cam_CV = self.XYZ_SV2CV(XYZs_cam_SV)
-        
-        return XYZs_cam_CV
     
     def get_transformation_matrix_CV(self, cam_info : Cameras._CameraInfo, delta_rpy=None):
         """
@@ -193,8 +180,73 @@ class Util:
         T[:3,3] = R_CV @ (-origin_cam_CV)[:,0]
         
         return T
+
+    def worldXYZ_SV2camXYZ_CV(self, worldXYZs_SV, cam_info : Cameras._CameraInfo):
+        """
+        Convert world coordinates in SV coordinate system to camera coordinates in openCV coordinate system
+
+        Args:
+            worldXYZs_SV (numpy.ndarray): 3D world points in SV coordinate system (3xn)
+            cam_info (Cameras._CameraInfo): Camera information
+
+        Returns:
+            numpy.ndarray: 3D points in camera coordinates in openCV coordinate system (3xn)
+        """
+        XYZs_cam_SV = self.worldXYZ_SV2camXYZ_SV(worldXYZs_SV, cam_info)
+        XYZs_cam_CV = self.XYZ_SV2CV(XYZs_cam_SV)
+        
+        return XYZs_cam_CV
+
+    def worldXYZ_CV2camXYZ_CV(self, worldXYZs_CV, cam_info : Cameras._CameraInfo):
+        """
+        Convert world coordinates in CV coordinate system to camera coordinates in openCV coordinate system
+
+        Args:
+            worldXYZs_CV (numpy.ndarray): 3D world points in CV coordinate system (3xn)
+            cam_info (Cameras._CameraInfo): Camera information
+
+        Returns:
+            numpy.ndarray: 3D points in camera coordinates in openCV coordinate system (3xn)
+        """
+        
+        origin_cam_CV, R_CV = cam_info.origin_CV, cam_info.R_CV
+
+        # Compute the extrinsic matrix
+        if origin_cam_CV.shape != (3,1):
+            origin_cam_CV = np.array(origin_cam_CV).reshape(3, 1)
+
+        # Project the world points to the image plane
+        T = np.eye(4)
+        T[:3,:3] = R_CV
+        T[:3,3] = R_CV @ (-origin_cam_CV)[:,0]
+        XYZs_cam_CV = T @ np.r_[worldXYZs_CV, 
+                                [[1]*worldXYZs_CV.shape[1]]]
+        return XYZs_cam_CV[:3]
     
-    def world2CAMxy(self, XYZs_SV, cam_info : Cameras._CameraInfo, K):
+    def camXYZ_CV2xy(self, XYZs_CV, cam_info, K):
+        """
+        Convert camera XYZ coordinates to camera image coordinates
+
+        Args:
+            XYZs_CV (numpy.ndarray): 3D points in camera CV coordinate system (3xn)
+            cam_info (Cameras._CameraInfo): Camera information
+            K (numpy.ndarray): Camera calibration matrix (3x3)
+
+        Returns:
+            numpy.ndarray: 2D image coordinates in camera coordinate system (2xn)
+        """
+        xys = K @ XYZs_CV
+        xys = xys[:2,:] / xys[2,:]
+
+        # distort if Fisheye model
+        if cam_info.cam_type is CamType.Fisheye:
+            xys_dist = self.distort_xy(xys, cam_info)
+            xys_undist = self.undistort_xy(xys, cam_info)
+            return xys_dist[:2]
+        
+        return xys[:2]
+    
+    def worldXYZ_SV2CAMxy(self, XYZs_SV, cam_info : Cameras._CameraInfo, K):
         """
         Convert world coordinates to camera image coordinates
 
@@ -207,16 +259,24 @@ class Util:
             numpy.ndarray: 2D image coordinates in camera coordinate system (2xn)
         """
         XYZs_CV = self.worldXYZ_SV2camXYZ_CV(XYZs_SV, cam_info)
-        xys = K @ XYZs_CV
-        xys = xys[:2,:] / xys[2,:]
+        xys = self.camXYZ_CV2xy(XYZs_CV, cam_info, K)
+        return xys
+    
+    def worldXYZ_CV2CAMxy(self, worldXYZs_CV, cam_info : Cameras._CameraInfo, K):
+        """
+        Convert world coordinates to camera image coordinates
 
-        # distort if Fisheye model
-        if cam_info.cam_type is CamType.Fisheye:
-            xys_dist = self.distort_xy(xys, cam_info)
-            xys_undist = self.undistort_xy(xys, cam_info)
-            return xys_dist[:2]
-        
-        return xys[:2]
+        Args:
+            XYZs_CV (numpy.ndarray): 3D world points in CV coordinate system (3xn)
+            cam_info (Cameras._CameraInfo): Camera information
+            K (numpy.ndarray): Camera calibration matrix (3x3)
+
+        Returns:
+            numpy.ndarray: 2D image coordinates in camera coordinate system (2xn)
+        """
+        XYZs_CV = self.worldXYZ_CV2camXYZ_CV(worldXYZs_CV, cam_info)
+        xys = self.camXYZ_CV2xy(XYZs_CV, cam_info, K)
+        return xys
 
     def worldXYZ_SV2CAMuv(self, XYZs_SV, cam_info : Cameras._CameraInfo):
         """

@@ -1,4 +1,5 @@
 import numpy as np
+import pandas as pd
 from params import *
 from scipy.interpolate import splprep, splev
 from scipy.optimize import fsolve
@@ -88,7 +89,7 @@ class SVMAlgorithm(Util):
         
         if False:
             R_CV = cam1_info.R_CV @ cam0_info.R_CV.T         # R not happy, not converted to CV yet
-            t_CV = self.XYZ_SV2CV(cam1_info.R_SV @ (cam1_info.origin_SV - cam0_info.origin_SV))   # t happy, converted to CV frame
+            t_CV = self.XYZ_SV2CV(cam1_info.R_CV @ (cam1_info.origin_CV - cam0_info.origin_CV))   # t happy, converted to CV frame
             E = skew(np.ravel(t_CV)) @ R_CV
         else:
             # Compute the Essential matrix
@@ -145,8 +146,8 @@ class SVMAlgorithm(Util):
         Returns:
             numpy.ndarray: Intersection points if any, None otherwise
         """
-        x1, y1 = splev(fp1, tck1)
-        x2, y2 = splev(fp2, tck2)
+        x1, y1 = splev(fp1, tck1, ext=0)  # ext=0 for extrapolation
+        x2, y2 = splev(fp2, tck2, ext=0)
 
         # convert to shapely LineStrings
         line1 = LineString(np.column_stack([x1, y1]))
@@ -165,6 +166,7 @@ class SVMAlgorithm(Util):
         cam0_info : Cameras._CameraInfo, 
         cam1_info : Cameras._CameraInfo,
         line_pos : LinePos,
+        idx_vis,
         cam0_delta_rpy=None,
         cam1_delta_rpy=None,
         cam1_delta_xy=None
@@ -180,6 +182,8 @@ class SVMAlgorithm(Util):
             Camera1 information
         line_pos : LinePos
             Line position (e.g., Left, Right, NextLeft, ...)
+        idx_vis
+            visibility index (to bring essential info)
         cam0_delta_rpy (Optional)
             Camera0 default setup angle error (degree)
         cam1_delta_rpy (Optional)
@@ -195,8 +199,8 @@ class SVMAlgorithm(Util):
         # epiline   from cam0 -> cam1
         # road line from cam1
         cam0_name = f'from_{cam0_info.cam_dir.name}'
-        xy_cam0_undist = cam1_info.epilines[cam0_name]['base_point_undist']
-        xys_epiline = cam1_info.epilines[cam0_name]['epiline']
+        xy_cam0_undist = cam1_info.epilines[cam0_name][line_pos.name][idx_vis]['base_point_undist']
+        xys_epiline = cam1_info.epilines[cam0_name][line_pos.name][idx_vis]['epiline']
         xys_road_line = cam1_info.road_lines[line_pos.name]
 
         # generate spline info
@@ -206,13 +210,16 @@ class SVMAlgorithm(Util):
         # find intersections
         # I believe there'd be only a single intersection point in this simulation...
         intersections = self.find_intersections(tck_epiline, fp_epiline, tck_road_line, fp_road_line)
+        if intersections is None:
+            return None
         xy_cam1 = intersections[0]
+
         if cam1_delta_xy is not None:
             xy_cam1 += cam1_delta_xy
         xy_cam1_undist = self.undistort_xy(xy_cam1, cam1_info)
 
         K_inv = np.linalg.inv(K)
-        uv0 = K_inv @ np.vstack((xy_cam0_undist,1))
+        uv0 = K_inv @ np.r_[xy_cam0_undist,1].reshape(-1,1)
         uv1 = K_inv @ np.vstack((xy_cam1_undist,1))
 
         # triangulate using points from each camera
@@ -232,3 +239,73 @@ class SVMAlgorithm(Util):
         XYZ = (XYZ_homo / XYZ_homo[-1])[:3].reshape(-1,1)
 
         return XYZ
+    
+    def calculate_bundle_info(
+        self,
+        cam0_info : Cameras._CameraInfo, 
+        cam1_info : Cameras._CameraInfo,
+        line_pos : LinePos,
+        vis,
+        XYZs_line_SV,
+        cam0_delta_rpy=None,
+        cam1_delta_rpy=None,
+        cam1_delta_xy=None
+    ):
+        """
+        Calculate a bundle of
+          - 3D point from cam0 -> cam1, 
+          - xy point from 3D point
+
+        Parameters
+        ----------
+        cam0_info : Cameras._CameraInfo
+            Camera0 information
+        cam1_info : Cameras._CameraInfo
+            Camera1 information
+        line_pos : LinePos
+            Line position (e.g., Left, Right, NextLeft, ...)
+        idx_vis
+            visibility index array (to bring essential info)
+        XYZs_line
+            Ground truth 3D line points
+        cam0_delta_rpy (Optional)
+            Camera0 default setup angle error (degree)
+        cam1_delta_rpy (Optional)
+            Camera1 default setup angle error (degree)
+        cam1_delta_xy (Optional, numpy.ndarray)
+            intersection point error in Camera1 image plane (pixel)            
+
+        Returns
+        -------
+        df_cam01 : pandas dataframe
+            idx - index of element
+            XYZ : numpy.ndarray (3x1) - Reconstructed 3D point in world openCV coordinate system
+            xy : numpy.ndarray (2x1) - image point from XYZ and Camera0
+        """
+
+        df_cam01 = pd.DataFrame(columns=['XYZ_est', 'XYZ_gt', 'XYZ_err', 'xy_est', 'xy_gt', 'xy_err'])
+        for idx in vis:
+            XYZ_est = \
+                self.reconstruct_3D_point(
+                    cam0_info, cam1_info, line_pos, idx,
+                    cam0_delta_rpy, cam1_delta_rpy, cam1_delta_xy
+                )
+            if XYZ_est is not None:
+                XYZ_gt = self.XYZ_SV2CV(XYZs_line_SV[:,idx])
+                XYZ_err = (XYZ_est - XYZ_gt).ravel()
+                xy_est = self.worldXYZ_CV2CAMxy(XYZ_est, cam0_info, K=K).ravel()
+                xy_gt = self.worldXYZ_CV2CAMxy(XYZ_gt, cam0_info, K).ravel()
+                xy_err = xy_est - xy_gt
+                XYZ_est = XYZ_est.ravel()
+                XYZ_gt = XYZ_gt.ravel()
+                df_cam01.loc[idx] = {
+                    'XYZ_est':XYZ_est,
+                    'XYZ_gt': XYZ_gt,
+                    'XYZ_err': XYZ_err,
+                    'xy_est': xy_est,
+                    'xy_gt': xy_gt,
+                    'xy_err': xy_err
+                }
+        
+        return df_cam01
+
